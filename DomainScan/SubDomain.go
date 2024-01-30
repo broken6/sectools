@@ -12,38 +12,25 @@ import (
 	"time"
 )
 
-//go:embed subdomains-top100.txt
-var d string
-var domain string
-var wg sync.WaitGroup
-var green = color.New(color.FgGreen)
-
-func scanWorker(ch <-chan string) {
-	defer wg.Done()
-	for x := range ch {
-		http := fmt.Sprintf("http://%s", x)
-		https := fmt.Sprintf("https://%s", x)
-		request := gorequest.New()
-		resp, _, err := request.Head(http).End()
-		if err != nil {
-			goto HTTPS
-		}
-		if resp.StatusCode == 200 || resp.StatusCode == 403 {
-			green.Println("[+]存活->", http, "  ", resp.StatusCode)
-		}
-	HTTPS:
-		resp, _, err = request.Head(https).End()
-		if err != nil {
-			continue
-		}
-		if resp.StatusCode == 200 || resp.StatusCode == 403 {
-			green.Println("[+]存活->", https, "  ", resp.StatusCode)
-		}
-	}
-}
-
 func init() {
 	flag.StringVar(&domain, "domain", "", "域名")
+}
+
+var domain string
+var cout = color.New(color.FgGreen)
+var wg sync.WaitGroup
+
+//go:embed subdomains-top100.txt
+var dict string
+
+func GetHeadHtppAvaliable(url string) (int, []error) {
+	request := gorequest.New().Timeout(3 * time.Second)
+	resp, _, err := request.Head(url).End()
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, err
 }
 
 func main() {
@@ -52,38 +39,52 @@ func main() {
 		flag.Usage()
 		return
 	}
-
-	startTime := time.Now()
-
-	ch := make(chan string, 1024)
-
-	// Start goroutines
-	concurrency := 20
-	for i := 0; i < concurrency; i++ {
-		wg.Add(1)
-		go scanWorker(ch)
-	}
-
 	var buffer bytes.Buffer
-	buffer.WriteString(d)
+	buffer.WriteString(dict)
+	t := time.Now()
 
-	// Send tasks to goroutines
+	process := 0
+	var currentURL string
+
 	for {
 		line, err := buffer.ReadString('\n')
 		if err != nil {
 			break
 		}
 		line = strings.TrimSpace(line)
-		sprintf := fmt.Sprintf("%s.%s", line, domain)
-		ch <- sprintf
+		var reqHTTP = fmt.Sprintf("http://%s.%s", line, domain)
+		var reqHTTPS = fmt.Sprintf("https://%s.%s", line, domain)
+
+		wg.Add(2)
+		go func(d string) {
+			defer wg.Done()
+			if status, err := GetHeadHtppAvaliable(d); err == nil && (status == 200 || status == 403) {
+				cout.Println(fmt.Sprintf("存活-> %s", d))
+			}
+		}(reqHTTP)
+
+		go func(d string) {
+			defer wg.Done()
+			if status, err := GetHeadHtppAvaliable(d); err == nil && (status == 200 || status == 403) {
+				cout.Println(fmt.Sprintf("存活-> %s", d))
+			}
+		}(reqHTTPS)
+
+		process += 1
+		switch process % 4 {
+		case 0:
+			fmt.Print("\033[36m[/]\033[m")
+		case 1:
+			fmt.Print("\033[36m[-]\033[m")
+		case 2:
+			fmt.Print("\033[36m[\\]\033[m")
+		case 3:
+			fmt.Print("\033[36m[|]\033[m")
+		}
+		fmt.Printf("%s\r", currentURL)
 	}
 
-	// Close channel after sending all tasks
-	close(ch)
-
-	// Wait for all goroutines to finish
 	wg.Wait()
-
-	elapsed := time.Since(startTime)
-	fmt.Println("扫描耗时:", elapsed)
+	color.Red("扫描结束,耗时->%s\n", time.Now().Sub(t).String())
+	fmt.Println("")
 }
